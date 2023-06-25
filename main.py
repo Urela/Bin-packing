@@ -32,30 +32,51 @@ class Model(nn.Module):
     self.fc3 = nn.Linear(24, 2)
     self.optimizer = optim.Adam(self.parameters(), lr=lr)
 
-  """
-  def forward(self, obs):
+    num_heads, key_size = 8, 16
+    self.model_size = num_heads * key_size
 
-    ems_embeddings   = self.embed_ems(obs.ems)
-    items_embeddings = self.embed_items(observation.items)
-    x = obs
+  def apply(self, observation: Observation):
+    # EMS encoder
+    ems_mask = self._make_self_attention_mask(observation.ems_mask).flatten()
+    ems_embeddings = self.embed_ems(observation.ems).flatten()
 
+    # Item encoder
+    items_mask = self._make_self_attention_mask( observation.items_mask & ~observation.items_placed).flatten()
+    items_embeddings = self.embed_items(observation.items).flatten()
+
+    state = np.concatenate([
+        ems_embeddings, ems_embeddings, ems_embeddings, 
+        items_embeddings, items_embeddings, items_embeddings, 
+    ])
+    #print(state.shape) (23040,)
+    """
+    action = self.forward(state)
+    return action
+    """
+    pass
+
+  def forward(self, x):
     x = F.relu(self.fc1(x))
     x = F.relu(self.fc2(x)) 
     x = self.fc3(x)
     return x
-    """
 
-  def embed_ems(self, ems: EMS) -> chex.Array:
+  def embed_ems(self, ems: EMS) -> np.ndarray:
     # Stack the 6 EMS attributes into a single vector [x1, x2, y1, y2, z1, z2].
-    ems_leaves = np.stack(jax.tree_util.tree_leaves(ems), axis=-1)
-    embeddings = nn.Linear(self.model_size)(ems_leaves)  # Projection of the EMSs.
-    return embeddings
+    ems_leaves = torch.tensor( np.stack(jax.tree_util.tree_leaves(ems), axis=-1),dtype=torch.float32 )
+    embeddings = nn.Linear(ems_leaves.shape[-1], self.model_size)(ems_leaves)  # Projection of the EMSs.
+    return embeddings.detach().numpy()
 
-  def embed_items(self, items: Item) -> chex.Array:
+  def embed_items(self, items: Item) -> np.ndarray:
     # Stack the 3 items attributes into a single vector [x_len, y_len, z_len].
-    items_leaves = np.stack(jax.tree_util.tree_leaves(items), axis=-1)
-    embeddings = nn.Linear(self.model_size)(items_leaves) # Projection of the EMSs.
-    return embeddings
+    items_leaves = torch.tensor( np.stack(jax.tree_util.tree_leaves(items), axis=-1), dtype=torch.float32 )
+    embeddings = nn.Linear(items_leaves.shape[-1], self.model_size)(items_leaves) # Projection of the EMSs.
+    return embeddings.detach().numpy()
+
+  def _make_self_attention_mask(self, mask: chex.Array) -> np.ndarray:
+    mask = np.einsum("...i,...j->...ij", mask, mask) # Use the same mask for the query and the key.
+    mask = np.expand_dims(mask, axis=-3) # Expand on the head dimension.
+    return mask
 
 agent = Model()
 
@@ -82,12 +103,7 @@ for epi in range(10):
     #env.render(obs)
     action = random_policy(key, obs)
 
-    #print("obs shape",obs)
-    #ems_embeddings   = agent.embed_ems(obs.ems)
-    #items_embeddings = agent.embed_items(obs.items)
-
     next_obs, timestep = jax.jit(env.step)(obs, action)
-
     is_action_valid = obs.action_mask[tuple(action)]  
     done = ~jnp.any(next_obs.action_mask) | ~is_action_valid 
     reward = env.reward_fn(obs, action, next_obs, is_action_valid , done)
