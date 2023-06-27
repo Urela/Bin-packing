@@ -8,6 +8,9 @@ import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions.categorical import Categorical
+from torch.distributions import MultivariateNormal
+
+
 
 
 import jax
@@ -36,13 +39,15 @@ class ActorCritic(nn.Module):
     super(ActorCritic, self).__init__()
     self.fc_actor = nn.Sequential(
       self.layer_init(nn.Linear(320, 128)), nn.ReLU(),
-      self.layer_init(nn.Linear(128, 128)), nn.ReLU(),
-      self.layer_init(nn.Linear(128,    2))
+      self.layer_init(nn.Linear(128,  64)), nn.ReLU(),
+      self.layer_init(nn.Linear(64,    2)),
+      nn.Softmax(dim=-1)
+
     )
     self.fc_critic = nn.Sequential(
       self.layer_init(nn.Linear(320, 128)), nn.ReLU(),
-      self.layer_init(nn.Linear(128, 128)), nn.ReLU(),
-      self.layer_init(nn.Linear(128,    1))
+      self.layer_init(nn.Linear(128,  64)), nn.ReLU(),
+      self.layer_init(nn.Linear(64,    2)),
     )
 
     self.optimizer = optim.Adam(self.parameters(), lr=lr)
@@ -60,13 +65,11 @@ class ActorCritic(nn.Module):
     items_placed =  np.stack(jax.tree_util.tree_leaves(observation.items_placed), axis=-1).flatten()
     _state = torch.from_numpy(np.concatenate((ems, items, items_placed)))
     dist = self.actor(_state)
-    action = dist.sample()
+    action = dist.sample(sample_shape=[2])  
 
-    probs  = torch.squeeze(dist.log_prob(action)).detach().numpy().astype(np.int32) 
-    action = torch.squeeze(action).item().detach().numpy().astype(np.int32) 
-    value  = torch.squeeze(value).item().detach().numpy().astype(np.int32) 
-
-
+    #probs  = torch.squeeze(dist.log_prob(action)).detach().numpy().astype(np.int32) 
+    action = action.numpy().astype(np.int32) 
+    #value  = torch.squeeze(value).item().detach().numpy().astype(np.int32) 
     #action = jnp.array(action, jnp.int32)
     return action
 

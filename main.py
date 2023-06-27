@@ -1,6 +1,9 @@
 # https://huggingface.co/InstaDeepAI/jumanji-benchmark-a2c-BinPack-v2
-import pickle
+#import pickle
 #import joblib
+
+import warnings
+warnings.filterwarnings("ignore")
 
 import numpy as np
 import jax
@@ -8,8 +11,6 @@ import jax.numpy as jnp
 from hydra import compose, initialize
 from huggingface_hub import hf_hub_download
 
-import warnings
-warnings.filterwarnings("ignore")
 
 from jumanji.training.setup_train import setup_agent, setup_env
 from jumanji.training.utils import first_from_device
@@ -38,10 +39,10 @@ for episode in range(NUM_EPISODES):
       key, action_key = jax.random.split(key)
       observation = jax.tree_util.tree_map(lambda x: x[None], timestep.observation)
 
-      action, _ = random_policy(env, observation, action_key)
       action = agent.get_action(observation)
-
-      print("_state",_state.shape)
+      print("PPO",action, action.shape)
+      #action, _ = random_policy(env, observation, action_key)
+      #print("random",action, action.shape)
 
       next_state, timestep = jax.jit(env.step)(state, action)
       reward = timestep.reward
