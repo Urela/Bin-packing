@@ -1,48 +1,106 @@
-# https://huggingface.co/InstaDeepAI/jumanji-benchmark-a2c-BinPack-v2
-#import pickle
-#import joblib
+from __future__ import annotations # delete 
+import warnings  
+warnings.filterwarnings('ignore') 
 
-import warnings
-warnings.filterwarnings("ignore")
+import torch
+import torch.optim as optim
+import torch.nn as nn
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from jumanji.wrappers import AutoResetWrapper
+from collections import deque
 
-import numpy as np
 import jax
 import jax.numpy as jnp
-from hydra import compose, initialize
-from huggingface_hub import hf_hub_download
+import numpy as np
+import jumanji
+from networks import flatten
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+env = jumanji.make("BinPack-v2")
+env = AutoResetWrapper(env)
+dummy_obs = env.observation_spec().generate_value()
+dummy_obs = flatten(env.observation_spec().generate_value())
+num_ems, num_items = env.action_spec().num_values
 
 
-from jumanji.training.setup_train import setup_agent, setup_env
-from jumanji.training.utils import first_from_device
+class Model(nn.Module):
+  def __init__(self, in_size, out_size, hidden_size=128):
+    super(Model, self).__init__()
+    self.fc1 = nn.Linear(state_size,  hidden_size)
+    self.fc2 = nn.Linear(hidden_size, hidden_size)
+    self.fc3 = nn.Linear(hidden_size, hidden_size)
+    self.fc4 = nn.Linear(hidden_size, action_size)
 
-# initialise the config
-with initialize(version_base=None, config_path="configs"):
-  cfg = compose(config_name="config.yaml", overrides=["env=bin_pack", "agent=a2c"])
+  def forward(self, x):
+    x = F.relu(self.fc1(x)) 
+    x = F.relu(self.fc2(x)) 
+    x = F.relu(self.fc3(x)) 
+    x = self.fc3(x)
+    return x
 
-env = setup_env(cfg).unwrapped
-agent = setup_agent(cfg, env)
+class DQN:
+  def __init__(self, in_size, out_size):
+    self.lr = 1e-3
+    self.gamma   = 0.99
+    self.epsilon = 1.0
+    self.eps_min = 0.05
+    self.eps_dec = 5e-4
 
-from model import random_policy, ActorCritic
-agent = ActorCritic()
+    self.out_size = out_size  
+    self.memory = deque(maxlen=25000)
+    self.policy = Model(in_size, out_size).to(device)
+    self.target = Model(in_size, out_size).to(device) 
+    self.target.load_state_dict(self.policy.state_dict())
+    self.optimizer = optim.Adam(self.policy.parameters(), lr=self.lr)
 
-# rollout a few episodes
+  def update_target(self):
+    self.target.load_state_dict( self.policy.state_dict() )
+
+  def update_epsilon(self):
+    self.epsilon = max(self.eps_min, self.epsilon*self.eps_dec)
+
+  def get_action(self, observation, timestep):
+    if np.random.rand() >= self.epsilon:
+      with torch.no_grad():
+        observation = torch.FloatTensor(observation).to(device)
+        ems_item_id = self.policy(observation ).max(0)[1].view(-1)
+        ems_item_id = int(ems_item_id)
+        ems_id, item_id = jnp.divmod(ems_item_id, num_items)
+        action = jnp.array([ems_id, item_id])
+
+    else: # random policy
+      num_ems, num_items = np.asarray(env.action_spec().num_values)
+      ems_item_id = jax.random.choice(
+        key=jax.random.PRNGKey( np.random.randint(0,9999999) ),
+        a=num_ems * num_items,
+        p=timestep.observation.action_mask.flatten(),
+
+      )
+      ems_id, item_id = jnp.divmod(ems_item_id, num_items)
+      action = jnp.array([ems_id, item_id], jnp.int32)
+    return action
+
+  def train(self, batch_size=128):
+    pass
+
+action_size =  num_ems * num_items
+state_size = dummy_obs.shape[0]
+agent = DQN(state_size, action_size)
+
 NUM_EPISODES = 10
-
-states,scores = [], []
-key = jax.random.PRNGKey(cfg.seed)
+states, scores = [], []
+key = jax.random.PRNGKey(1337)
 for episode in range(NUM_EPISODES):
     key = jax.random.PRNGKey( np.random.randint(0,9999999) )
     (key, reset_key), score = jax.random.split(key), 0
     state, timestep = jax.jit(env.reset)(reset_key)
     while not timestep.last():
-      #env.render(state)
+      env.render(state)
       key, action_key = jax.random.split(key)
-      observation = jax.tree_util.tree_map(lambda x: x[None], timestep.observation)
-
-      action = agent.get_action(observation)
-      print("PPO",action, action.shape)
-      #action, _ = random_policy(env, observation, action_key)
-      #print("random",action, action.shape)
+      observation = flatten(timestep.observation)
+      action = agent.get_action(observation, timestep)
 
       next_state, timestep = jax.jit(env.step)(state, action)
       reward = timestep.reward
