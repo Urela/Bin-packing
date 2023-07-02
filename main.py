@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 import jumanji
 from networks import flatten
+import random
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -82,7 +83,26 @@ class DQN:
       action = jnp.array([ems_id, item_id], jnp.int32)
     return action
 
-  def train(self, batch_size=128):
+  def train(self, batch_size=3):
+    if len(self.memory) >= batch_size:
+      print("training")
+      for i in range(10):
+        batch = random.sample(self.memory, batch_size)
+        states  = torch.tensor([x[0] for x in batch], dtype=torch.float)
+        actions = torch.tensor([[x[1]] for x in batch])
+        rewards = torch.tensor([[x[2]] for x in batch]).float()
+        nstates = torch.tensor([x[3] for x in batch], dtype=torch.float)
+        dones   = torch.tensor([x[4] for x in batch])
+
+        q_pred = self.policy(states).gather(1, actions)
+        q_targ = self.target(nstates).max(1)[0].unsqueeze(1)
+        q_targ[dones] = 0.0  # set all terminal states' value to zero
+        q_targ = rewards + self.gamma * q_targ
+
+        loss = F.smooth_l1_loss(q_pred, q_targ).to('cpu')
+        self.policy.optimizer.zero_grad()
+        loss.backward()
+        self.policy.optimizer.step()
     pass
 
 action_size =  num_ems * num_items
@@ -97,13 +117,16 @@ for episode in range(NUM_EPISODES):
     (key, reset_key), score = jax.random.split(key), 0
     state, timestep = jax.jit(env.reset)(reset_key)
     while not timestep.last():
-      env.render(state)
-      key, action_key = jax.random.split(key)
-      observation = flatten(timestep.observation)
-      action = agent.get_action(observation, timestep)
+      #env.render(state)
+      action = agent.get_action(flatten(state), timestep)
 
       next_state, timestep = jax.jit(env.step)(state, action)
       reward = timestep.reward
+      done = True if reward!=0 else False
+
+      agent.memory.append((flatten(state), action, reward, flatten(next_state), done))
+      agent.train()
+
       states.append(next_state)
       score+=reward
       state = next_state
