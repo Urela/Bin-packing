@@ -86,23 +86,20 @@ class DQN:
   def train(self, batch_size=3):
     if len(self.memory) >= batch_size:
       print("training")
-      for i in range(10):
-        batch = random.sample(self.memory, batch_size)
-        states  = torch.tensor([x[0] for x in batch], dtype=torch.float)
-        actions = torch.tensor([[x[1]] for x in batch])
-        rewards = torch.tensor([[x[2]] for x in batch]).float()
-        nstates = torch.tensor([x[3] for x in batch], dtype=torch.float)
-        dones   = torch.tensor([x[4] for x in batch])
+      indices = np.random.randint(0, len(self.memory), size=batch_size)
 
-        q_pred = self.policy(states).gather(1, actions)
-        q_targ = self.target(nstates).max(1)[0].unsqueeze(1)
-        q_targ[dones] = 0.0  # set all terminal states' value to zero
-        q_targ = rewards + self.gamma * q_targ
+      #state, action, reward, next_state, done
+      state  = np.stack([self.memory[i][0] for i in indices])
+      action = np.stack([self.memory[i][1] for i in indices])
+      reward = np.stack([self.memory[i][2] for i in indices]).reshape(-1,1)
+      next_state = np.stack([self.memory[i][3] for i in indices]).reshape(-1,1)
+      done = np.stack([self.memory[i][4] for i in indices]).reshape(-1,1)
 
-        loss = F.smooth_l1_loss(q_pred, q_targ).to('cpu')
-        self.policy.optimizer.zero_grad()
-        loss.backward()
-        self.policy.optimizer.step()
+      state  = torch.FloatTensor(state).to(device)
+      action  = torch.FloatTensor(action).to(device)
+      next_state  = torch.FloatTensor(next_state).to(device)
+      reward  = torch.FloatTensor(reward).to(device)
+      done  = torch.FloatTensor(done).to(device)
     pass
 
 action_size =  num_ems * num_items
