@@ -14,8 +14,25 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import jumanji
-from networks import flatten
 import random
+
+def flatten(obs: Observatoins):
+  p=[]  # obs = timestep.observation
+  p = np.append(obs.ems.x1, obs.ems.x2)
+ #p = np.append(p,obs.ems.x2)
+  p = np.append(p,obs.ems.y1)
+  p = np.append(p,obs.ems.y2)
+  p = np.append(p,obs.ems.z1)
+  p = np.append(p,obs.ems.z2)
+  p = np.append(p,obs.ems_mask.flatten())
+  p = np.append(p,obs.items.x_len)
+  p = np.append(p,obs.items.y_len)
+  p = np.append(p,obs.items.z_len)
+  p = np.append(p,obs.items_mask.flatten())
+  p = np.append(p,obs.items_placed.flatten())
+  return p
+
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -83,31 +100,37 @@ class DQN:
       action = jnp.array([ems_id, item_id], jnp.int32)
     return action
 
-  def train(self, batch_size=3):
+  def train(self, batch_size=128):
+    loss = 0
     if len(self.memory) >= batch_size:
       print("training")
-      indices = np.random.randint(0, len(self.memory), size=batch_size)
+      batch = random.sample(self.memory, batch_size)
 
-      #state, action, reward, next_state, done
-      state  = np.stack([self.memory[i][0] for i in indices])
-      action = np.stack([self.memory[i][1] for i in indices])
-      reward = np.stack([self.memory[i][2] for i in indices]).reshape(-1,1)
-      next_state = np.stack([self.memory[i][3] for i in indices]).reshape(-1,1)
-      done = np.stack([self.memory[i][4] for i in indices]).reshape(-1,1)
+      # This bad a replay buffer as it is slow, we can speed up using hacks. but we just verifing
+      states  = torch.tensor(np.array([x[0] for x in batch]), dtype=torch.float).to(device)
+      actions = torch.tensor(np.array([x[1] for x in batch]), dtype=torch.int64).to(device)
+      rewards = torch.tensor(np.array([x[2] for x in batch]).reshape(-1,1), dtype=torch.float).to(device)
+      nstates = torch.tensor(np.array([x[3] for x in batch]), dtype=torch.float).to(device)
+      dones   = torch.tensor(np.array([x[4] for x in batch], dtype=np.bool)).to(device)
 
-      state  = torch.FloatTensor(state).to(device)
-      action  = torch.FloatTensor(action).to(device)
-      next_state  = torch.FloatTensor(next_state).to(device)
-      reward  = torch.FloatTensor(reward).to(device)
-      done  = torch.FloatTensor(done).to(device)
-    pass
+      q_pred = self.policy(states).gather(1, actions)
+      q_targ = self.target(nstates).max(1)[0].unsqueeze(1)
+      q_targ[dones] = 0.0  # set all terminal states' value to zero
+      q_targ = rewards + self.gamma * q_targ
+
+      loss = F.smooth_l1_loss(q_pred, q_targ).to('cpu')
+      self.optimizer.zero_grad()
+      loss.backward()
+      self.optimizer.step()
+      return loss.item()
+    return 0
 
 action_size =  num_ems * num_items
 state_size = dummy_obs.shape[0]
 agent = DQN(state_size, action_size)
 
 NUM_EPISODES = 10
-states, scores = [], []
+states, scores, losses = [], [], []
 key = jax.random.PRNGKey(1337)
 for episode in range(NUM_EPISODES):
     key = jax.random.PRNGKey( np.random.randint(0,9999999) )
@@ -122,8 +145,9 @@ for episode in range(NUM_EPISODES):
       done = True if reward!=0 else False
 
       agent.memory.append((flatten(state), action, reward, flatten(next_state), done))
-      agent.train()
+      loss = agent.train()
 
+      losses.append(loss)
       states.append(next_state)
       score+=reward
       state = next_state
