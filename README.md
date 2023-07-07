@@ -1,7 +1,7 @@
 # Attempting Jumanji's Bin packing environemnt
 
 <p align="center">
-<img src="painck_v2.gif" width="350"/> </p>
+<img src="connector_v1.png" width="350"/> </p>
 
 Policy 
 --------------------------
